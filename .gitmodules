@@ -1,0 +1,3 @@
+[submodule "Vendor/SystemDaemon"]
+	path = Vendor/SystemDaemon
+	url = git://github.com/tomglue/system_daemon.git
