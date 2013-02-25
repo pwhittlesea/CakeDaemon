@@ -34,8 +34,8 @@ class DaemonShell extends AppShell {
 	public function stop() {
 		// Setup
 		$options = array(
-		    'appName' => 'cakedaemon',
-		    'logLocation' => TMP . "logs" . DS . $this->loggingFile . '.log'
+			'appName' => 'cakedaemon',
+			'logLocation' => TMP . "logs" . DS . $this->loggingFile . '.log'
 		);
 
 		System_Daemon::setOptions($options);
@@ -55,27 +55,27 @@ class DaemonShell extends AppShell {
 		// Scan command line attributes for allowed arguments
 		$args = array_merge($_SERVER, $_ENV);
 		foreach ($args['argv'] as $k=>$arg) {
-		    if (isset($runmode[$arg])) {
-		        $runmode[$arg] = true;
-		    }
+			if (isset($runmode[$arg])) {
+				$runmode[$arg] = true;
+			}
 		}
 
 		// Setup
 		$options = array(
-		    'appName' => 'cakedaemon',
-		    'appDescription' => 'Runs extended tasks defined in the host app in the background',
-		    'sysMaxExecutionTime' => '0',
-		    'sysMaxInputTime' => '0',
-		    'sysMemoryLimit' => '1024M',
-		    'logLocation' => TMP . "logs" . DS . $this->loggingFile . '.log'
+			'appName' => 'cakedaemon',
+			'appDescription' => 'Runs extended tasks defined in the host app in the background',
+			'sysMaxExecutionTime' => '0',
+			'sysMaxInputTime' => '0',
+			'sysMemoryLimit' => '1024M',
+			'logLocation' => TMP . "logs" . DS . $this->loggingFile . '.log'
 		);
 
 		System_Daemon::setOptions($options);
 
-		// This program can also be run in the forground with runmode --no-daemon
+		// This program can also be run in the forground with argument no-daemon
 		if (!$runmode['no-daemon']) {
-		    // Spawn Daemon
-		    System_Daemon::start();
+			// Spawn Daemon
+			System_Daemon::start();
 		}
 
 		$this->_initConfig();
@@ -163,7 +163,7 @@ class DaemonShell extends AppShell {
  * @return void
  */
 	private function _mopUp() {
-		System_Daemon::debug("checking for finished child threads");
+		System_Daemon::debug("checking for finished processes");
 		$pid = pcntl_waitpid($pid = -1, $status, WNOHANG);
 
 		// While we have children to tend to
@@ -171,14 +171,13 @@ class DaemonShell extends AppShell {
 			$runner = $this->DaemonRunner->findByPid($pid, 'job');
 			$jobId = $runner['DaemonRunner']['job'];
 			if (pcntl_wifexited($status)) {
-				if ($this->DaemonQueue->delete($jobId)) {
-					System_Daemon::DEBUG("child $pid exited normally");
-					$this->DaemonRunner->setFinished($pid);
+				if ($this->DaemonQueue->setComplete($jobId) && $this->DaemonRunner->setFinished($pid)) {
+					System_Daemon::debug("process[$pid] exited normally after executing job[$jobId]");
 				} else {
-					System_Daemon::crit("could not delete job $jobId");
+					System_Daemon::crit("could not verify job[$jobId] was completed");
 				}
 			} else {
-				System_Daemon::crit("child $pid was terminated before completion");
+				System_Daemon::crit("process[$pid] was terminated before completion");
 				//TODO RESTART TASK
 			}
 			// Check for other child tasks that have finished
@@ -195,19 +194,19 @@ class DaemonShell extends AppShell {
  * @return void
  */
 	private function _spawnChild($task, $runner) {
+		$runnerType = $runner['DaemonRunner']['type'];
 		$pid = pcntl_fork();
 		if ($pid == -1) {
-			System_Daemon::crit("could not spawn child with type " . $runner['DaemonRunner']['type']);
+			System_Daemon::crit("could not spawn process with type[$runnerType]");
 			return false;
 		} else if ($pid) {
 			return true;
 		} else {
 			$pid = posix_getpid();
-			System_Daemon::debug("created child with pid $pid");
+			System_Daemon::debug("created process[$pid]");
 
 			$runnerId = $runner['DaemonRunner']['id'];
 			$taskId = $task['DaemonQueue']['id'];
-			$runnerType = $runner['DaemonRunner']['type'];
 
 			// Register that we are running this job
 			$this->DaemonRunner->setRunning($runnerId, $pid, $taskId);
@@ -217,14 +216,14 @@ class DaemonShell extends AppShell {
 				if (method_exists($nodeInstance, 'cron')) {
 					$cron = $nodeInstance->cron();
 					if (!$this->DaemonQueue->reschedule($cron, $task)) {
-						System_Daemon::warn("task $taskId could not be recheduled");
+						System_Daemon::warn("task[$taskId] could not be recheduled");
 					} else {
-						System_Daemon::debug("task $taskId was recheduled");
+						System_Daemon::debug("task[$taskId] was recheduled");
 					}
 				}
 				exit;
 			} else {
-				System_Daemon::crit("task $taskId failed to execute");
+				System_Daemon::crit("task[$taskId] failed to execute");
 				exit(1);
 			}
 		}

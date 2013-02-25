@@ -30,14 +30,22 @@ class DaemonQueue extends CakeDaemonAppModel {
 	}
 
 	public function reschedule($mins, $task) {
-		$this->create();
-		$newTask = array(
-			'created' => $this->_findNextSlot($task['DaemonQueue']['created'], $mins),
-			'task' => $task['DaemonQueue']['task'],
-			'subtask' => $task['DaemonQueue']['subtask'],
-			'focus' => $task['DaemonQueue']['focus']
-		);
-		return $this->save($newTask);
+		$this->id = $task['DaemonQueue']['id'];
+		return $this->saveField('created', $this->_findNextSlot($task['DaemonQueue']['created'], $mins));
+	}
+
+	public function setComplete($taskId) {
+		$task = $this->findById($taskId);
+		if ($task == null) {
+			return false;
+		}
+
+		$taskTime = $task['DaemonQueue']['created'];
+		if (date('Y-m-d H:i:s') > strtotime($taskTime)) {
+			return $this->delete($taskId);
+		}
+
+		return true;
 	}
 
 	private function _findNextSlot($date, $mins) {
@@ -48,4 +56,5 @@ class DaemonQueue extends CakeDaemonAppModel {
 		}
 		return date('Y-m-d H:i:s', strtotime($date . " +$then minutes"));
 	}
+
 }
