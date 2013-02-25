@@ -18,10 +18,6 @@ class DaemonShell extends AppShell {
 
 	public $loggingFile = "worker";
 
-	public $tasks = array(
-		'PidManagement'
-	);
-
 	public $uses = array(
 		'CakeDaemon.DaemonQueue',
 		'CakeDaemon.DaemonRunner'
@@ -87,24 +83,17 @@ class DaemonShell extends AppShell {
 		// 4) Wait for a pre-determined amount of time
 		// 5) Check if any children have finished and start again
 		while (!System_Daemon::isDying()) {
-			$stale = $this->DaemonRunner->findStale();
-			$taskIds = Set::extract("/DaemonRunner/task_id", $stale);
+			$taskIds = $this->DaemonRunner->findStaleJobTypes();
 
-			sort($taskIds);
-
-			foreach ($taskIds as $t) {
-				$task = $this->DaemonQueue->findTask($t);
-				if ($task) {
-					$runner = Set::extract("/DaemonRunner[task_id=$t]", $stale);
-					$this->_spawnChild($task, $runner[0]);
+			foreach ($taskIds as $id) {
+				if ($task = $this->DaemonQueue->findTask($id)) {
+					$this->_spawnChild($task, $this->DaemonRunner->findStaleJobByJobType($id));
 				}
 			}
 
 			System_Daemon::iterate($this->config['timeout']);
 
-			// Sleeping broke our database connecitons so lets reconnect
-			$this->DaemonRunner->getDatasource()->connect();
-			$this->DaemonQueue->getDatasource()->connect();
+			$this->_reconnectDB();
 
 			$this->_mopUp();
 		}
@@ -138,20 +127,20 @@ class DaemonShell extends AppShell {
 			$this->config['timeout'] = 2;
 		}
 
-		// Remove all the old nodes as we are reloading from config
-		$this->DaemonRunner->deleteAll(array('id >' => -2));
+		// Initialise the in-memory store of the runners
+		$this->DaemonRunner->init();
 
-		foreach ($this->config['nodes'] as $node) {
-			// Check that we can create an instance of a this node type
-			$nodeInstance = $this->Tasks->load($node);
-			$newRunner = array(
-				'type' => $node,
-				'task_id' => $nodeInstance->getTaskId(),
-				'job' => -1,
-				'pid' => -1
-			);
-			// Save the new node
-			$this->DaemonRunner->save($newRunner);
+		foreach ($this->config['nodes'] as $nodeName) {
+			// Check that we can create an instance of a this node type and save it
+			$nodeInstance = $this->Tasks->load($nodeName);
+
+			if (method_exists($nodeInstance, 'cron')) {
+				$cron = $nodeInstance->cron();
+			} else {
+				$cron = null;
+			}
+
+			$this->DaemonRunner->newRunner($nodeName, 1, $nodeInstance->getTaskId(), $cron);
 		}
 		System_Daemon::info("config loaded");
 	}
@@ -168,11 +157,12 @@ class DaemonShell extends AppShell {
 
 		// While we have children to tend to
 		while ($pid > 0) {
-			$runner = $this->DaemonRunner->findByPid($pid, 'job');
+			$runner = $this->DaemonRunner->findByPid($pid);
 			$jobId = $runner['DaemonRunner']['job'];
+			$runnerUuid = $runner['DaemonRunner']['uuid'];
 			if (pcntl_wifexited($status)) {
-				if ($this->DaemonQueue->setComplete($jobId) && $this->DaemonRunner->setFinished($pid)) {
-					System_Daemon::debug("process[$pid] exited normally after executing job[$jobId]");
+				if ($this->DaemonQueue->setComplete($jobId) && $this->DaemonRunner->setFinished($runnerUuid)) {
+					System_Daemon::info("process[$pid] exited normally after executing job[$jobId]");
 				} else {
 					System_Daemon::crit("could not verify job[$jobId] was completed");
 				}
@@ -186,6 +176,16 @@ class DaemonShell extends AppShell {
 	}
 
 /**
+ * _reconnectDB function.
+ *
+ * @access private
+ * @return void
+ */
+	private function _reconnectDB() {
+		$this->DaemonQueue->getDatasource()->reconnect();
+	}
+
+/**
  * _spawnChild function.
  *
  * @access private
@@ -194,10 +194,16 @@ class DaemonShell extends AppShell {
  * @return void
  */
 	private function _spawnChild($task, $runner) {
-		$runnerType = $runner['DaemonRunner']['type'];
+		$taskName = $runner['DaemonRunner']['taskName'];
+		$taskId = $task['DaemonQueue']['id'];
+
 		$pid = pcntl_fork();
+
+		// Everytime we fork we break our connection
+		$this->_reconnectDB();
+
 		if ($pid == -1) {
-			System_Daemon::crit("could not spawn process with type[$runnerType]");
+			System_Daemon::crit("could not spawn process with type[$taskName]");
 			return false;
 		} else if ($pid) {
 			return true;
@@ -205,16 +211,12 @@ class DaemonShell extends AppShell {
 			$pid = posix_getpid();
 			System_Daemon::debug("created process[$pid]");
 
-			$runnerId = $runner['DaemonRunner']['id'];
-			$taskId = $task['DaemonQueue']['id'];
-
 			// Register that we are running this job
-			$this->DaemonRunner->setRunning($runnerId, $pid, $taskId);
+			$this->DaemonRunner->setRunning($runner['DaemonRunner']['uuid'], $pid, $taskId);
 
-			$nodeInstance = $this->Tasks->load($runner['DaemonRunner']['type']);
+			$nodeInstance = $this->Tasks->load($taskName);
 			if ($nodeInstance->execute($task)) {
-				if (method_exists($nodeInstance, 'cron')) {
-					$cron = $nodeInstance->cron();
+				if ($cron = $runner['DaemonRunner']['cron']) {
 					if (!$this->DaemonQueue->reschedule($cron, $task)) {
 						System_Daemon::warn("task[$taskId] could not be recheduled");
 					} else {

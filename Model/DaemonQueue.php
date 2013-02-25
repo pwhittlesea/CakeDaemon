@@ -17,6 +17,7 @@ class DaemonQueue extends CakeDaemonAppModel {
 	public $useTable = 'daemon_queue';
 
 	public function findTask($task) {
+		// TODO exclude in progress tasks
 		return $this->find(
 			'first',
 			array(
@@ -41,7 +42,7 @@ class DaemonQueue extends CakeDaemonAppModel {
 		}
 
 		$taskTime = $task['DaemonQueue']['created'];
-		if (date('Y-m-d H:i:s') > strtotime($taskTime)) {
+		if (strtotime('now') > strtotime($taskTime)) {
 			return $this->delete($taskId);
 		}
 
