@@ -16,22 +16,61 @@ class DaemonRunner extends CakeDaemonAppModel {
 
 	public $useTable = false;
 
+/**
+ * init function.
+ * Clear the old SESSION information on the runners
+ */
 	public function init() {
 		DaemonRunner::sessionWrite('runners', array());
 	}
 
+/**
+ * findByPid function.
+ * Find a runner based on the PID that was assigned to it
+ *
+ * @param mixed $pid the PID to check
+ * @return the runner details
+ */
 	public function findByPid($pid) {
 		$runners = DaemonRunner::sessionRead('runners');
 		$matchingRunners = Set::extract("/DaemonRunner[pid=$pid]", $runners);
+		if (!isset($matchingRunners[0])){
+			return null;
+		}
 		return $matchingRunners[0];
 	}
 
-	public function findStaleJobByJobType($jobType) {
+/**
+ * findProcessingJobs function.
+ * Get a list of tasks that are currently processing.
+ *
+ * @return the list of jobs
+ */
+	public function findProcessingJobs() {
+		$runners = DaemonRunner::sessionRead('runners');
+		return Set::extract("/DaemonRunner/job", $runners);
+	}
+
+/**
+ * findStaleRunnerByJobType function.
+ * Find a runner that is capable of running a task of type.
+ *
+ * @param mixed $jobType the job type
+ * @return the runner information
+ */
+	public function findStaleRunnerByJobType($jobType) {
 		$runners = DaemonRunner::sessionRead('runners');
 		$matchingRunners = Set::extract("/DaemonRunner[jobType=$jobType][pid=-1]", $runners);
 		return $matchingRunners[0];
 	}
 
+/**
+ * findStaleJobTypes function.
+ * Find a list of types that we have runners for that are not
+ * processing.
+ *
+ * @return the list of types
+ */
 	public function findStaleJobTypes() {
 		$runners = DaemonRunner::sessionRead('runners');
 		$taskIds = Set::extract("/DaemonRunner[pid=-1]/jobType", $runners);
@@ -39,6 +78,16 @@ class DaemonRunner extends CakeDaemonAppModel {
 		return $taskIds;
 	}
 
+/**
+ * newRunner function.
+ * Create a new runner
+ *
+ * @param mixed $name the name for the runner
+ * @param mixed $singleton can we have only one of the runner
+ * @param mixed $jobType the type the runner can run
+ * @param mixed $cron should we rechedule not delete on completion?
+ * @return void
+ */
 	public function newRunner($name, $singleton, $jobType, $cron) {
 		$runners = DaemonRunner::sessionRead('runners');
 		$runners[] = array(
@@ -55,6 +104,13 @@ class DaemonRunner extends CakeDaemonAppModel {
 		DaemonRunner::sessionWrite('runners', $runners);
 	}
 
+/**
+ * setFinished function.
+ * Mark a runner as complete and clear its state
+ *
+ * @param mixed $runnerUuid the unique id for the runner
+ * @return true if the runner was found
+ */
 	public function setFinished($runnerUuid) {
 		$runners = DaemonRunner::sessionRead('runners');
 		foreach ($runners as $a => $runner) {
@@ -68,6 +124,15 @@ class DaemonRunner extends CakeDaemonAppModel {
 		return false;
 	}
 
+/**
+ * setRunning function.
+ * Mark that the runner is processing a job
+ *
+ * @param mixed $runnerUuid the uuid of the runner
+ * @param float $pid (default: -1) the new PID
+ * @param float $job (default: -1) the new job number
+ * @return true if everything went fine
+ */
 	public function setRunning($runnerUuid, $pid = -1, $job = -1) {
 		$runners = DaemonRunner::sessionRead('runners');
 		foreach ($runners as $a => $runner) {
@@ -116,10 +181,18 @@ class DaemonRunner extends CakeDaemonAppModel {
 		DaemonRunner::sessionClose();
 	}
 
+/**
+ * sessionClose function.
+ * Close a session
+ */
 	public static function sessionClose() {
 		session_write_close();
 	}
 
+/**
+ * sessionOpen function.
+ * Open a new session or an existing one
+ */
 	public static function sessionOpen() {
 		session_name("DaemonSession");
 		if (!@session_start()) {

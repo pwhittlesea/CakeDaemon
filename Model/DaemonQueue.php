@@ -16,12 +16,15 @@ class DaemonQueue extends CakeDaemonAppModel {
 
 	public $useTable = 'daemon_queue';
 
-	public function findTask($task) {
+	public function findJob($task, $exclusions = array()) {
 		// TODO exclude in progress tasks
 		return $this->find(
 			'first',
 			array(
 				'conditions' => array(
+					'NOT' => array(
+						'id' => $exclusions
+					),
 					'task' => $task,
 					'created <=' => date('Y-m-d H:i:s')
 				),
@@ -30,15 +33,30 @@ class DaemonQueue extends CakeDaemonAppModel {
 		);
 	}
 
+/**
+ * reschedule function.
+ * Ensure that the job is run again after a certain amoun of time
+ *
+ * @param mixed $mins the mins to delay by
+ * @param mixed $task the task to rechedule
+ * @return true if all went well
+ */
 	public function reschedule($mins, $task) {
 		$this->id = $task['DaemonQueue']['id'];
-		return $this->saveField('created', $this->_findNextSlot($task['DaemonQueue']['created'], $mins));
+		return $this->saveField('created', $this->__findNextSlot($task['DaemonQueue']['created'], $mins));
 	}
 
+/**
+ * setComplete function.
+ * Mark a task as complete
+ *
+ * @param mixed $taskId the task id
+ * @return true if all went ok
+ */
 	public function setComplete($taskId) {
 		$task = $this->findById($taskId);
 		if ($task == null) {
-			return false;
+			return true;
 		}
 
 		$taskTime = $task['DaemonQueue']['created'];
@@ -49,7 +67,15 @@ class DaemonQueue extends CakeDaemonAppModel {
 		return true;
 	}
 
-	private function _findNextSlot($date, $mins) {
+/**
+ * __findNextSlot function.
+ * Find the next slot that is in the future
+ *
+ * @param mixed $date the original date for the task
+ * @param mixed $mins the number of mins to add to the original date
+ * @return the new time
+ */
+	private function __findNextSlot($date, $mins) {
 		$now = strtotime(date('Y-m-d H:i:s'));
 		$then = $mins;
 		while ($now > strtotime($date . " +$then minutes")) {
@@ -57,5 +83,4 @@ class DaemonQueue extends CakeDaemonAppModel {
 		}
 		return date('Y-m-d H:i:s', strtotime($date . " +$then minutes"));
 	}
-
 }

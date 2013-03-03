@@ -9,19 +9,38 @@
  * @since         GitCake v 1.1
  * @license       MIT License (http://www.opensource.org/licenses/mit-license.php)
  */
-
+App::import('Console/Command', 'AppShell');
 App::import('Vendor', 'CakeDaemon.SystemDaemon', array('file' => 'SystemDaemon'.DS.'System'.DS.'Daemon.php'));
 
 class DaemonShell extends AppShell {
 
 	public $config = array();
 
-	public $loggingFile = "worker";
-
 	public $uses = array(
 		'CakeDaemon.DaemonQueue',
 		'CakeDaemon.DaemonRunner'
 	);
+
+/**
+ * getOptionParser function.
+ * @see http://book.cakephp.org/2.0/en/console-and-shells.html
+ */
+	public function getOptionParser() {
+		$parser = parent::getOptionParser();
+		$parser->addSubcommand('start', array(
+			'help' => __('Start the Daemon.')
+		))->addOption('no-daemon', array(
+			'boolean' => true,
+			'help' => __('Prevent background forking')
+		));
+		$parser->addSubcommand('stop', array(
+			'help' => __('Stop the Daemon.')
+		));
+		$parser->addSubcommand('status', array(
+			'help' => __('Check the state of the Daemon.')
+		));
+		return $parser;
+	}
 
 /**
  * stop function.
@@ -31,7 +50,7 @@ class DaemonShell extends AppShell {
 		// Setup
 		$options = array(
 			'appName' => 'cakedaemon',
-			'logLocation' => TMP . "logs" . DS . $this->loggingFile . '.log'
+			'logLocation' => TMP . "logs" . DS . 'cakedaemon.log'
 		);
 
 		System_Daemon::setOptions($options);
@@ -43,19 +62,6 @@ class DaemonShell extends AppShell {
  * Start an instance of the worker.
  */
 	public function start() {
-		// Allowed arguments & their defaults
-		$runmode = array(
-			'no-daemon' => false,
-		);
-
-		// Scan command line attributes for allowed arguments
-		$args = array_merge($_SERVER, $_ENV);
-		foreach ($args['argv'] as $k=>$arg) {
-			if (isset($runmode[$arg])) {
-				$runmode[$arg] = true;
-			}
-		}
-
 		// Setup
 		$options = array(
 			'appName' => 'cakedaemon',
@@ -63,18 +69,19 @@ class DaemonShell extends AppShell {
 			'sysMaxExecutionTime' => '0',
 			'sysMaxInputTime' => '0',
 			'sysMemoryLimit' => '1024M',
-			'logLocation' => TMP . "logs" . DS . $this->loggingFile . '.log'
+			'logLocation' => TMP . "logs" . DS . 'cakedaemon.log',
+			'logVerbosity' => System_Daemon::LOG_INFO
 		);
-
 		System_Daemon::setOptions($options);
+		System_Daemon::setSigHandler('SIGCHLD', array(&$this, 'handleSIGCHLD'));
 
 		// This program can also be run in the forground with argument no-daemon
-		if (!$runmode['no-daemon']) {
+		if (!$this->params['no-daemon']) {
 			// Spawn Daemon
 			System_Daemon::start();
 		}
 
-		$this->_initConfig();
+		$this->__initConfig();
 
 		// Here we have to do several things
 		// 1) Figure out how many stale static nodes we have
@@ -84,30 +91,77 @@ class DaemonShell extends AppShell {
 		// 5) Check if any children have finished and start again
 		while (!System_Daemon::isDying()) {
 			$taskIds = $this->DaemonRunner->findStaleJobTypes();
+			$currentlyRunningJobs = $this->DaemonRunner->findProcessingJobs();
 
+			System_Daemon::debug("Stale Process Types: " . json_encode($taskIds));
+			System_Daemon::debug("Aware of currently running job ids: " . json_encode($currentlyRunningJobs));
 			foreach ($taskIds as $id) {
-				if ($task = $this->DaemonQueue->findTask($id)) {
-					$this->_spawnChild($task, $this->DaemonRunner->findStaleJobByJobType($id));
+				if ($job = $this->DaemonQueue->findJob($id, $currentlyRunningJobs)) {
+					$currentlyRunningJobs[] = $job['DaemonQueue']['id'];
+					$this->__spawnChild($job, $this->DaemonRunner->findStaleRunnerByJobType($id));
 				}
 			}
 
-			System_Daemon::iterate($this->config['timeout']);
+			// Sometimes our sleep is inturrupted
+			// This could be by a very noisy owl, or by a completed child process.
+			// Either way, we should get our beauty sleep!
+			$timeToSleep = $this->config['timeout'];
+			while ($timeToSleep > 0) {
+				$timeToSleep = sleep($timeToSleep);
+			}
+			clearstatcache();
 
-			$this->_reconnectDB();
+			$this->__reconnectDB();
 
-			$this->_mopUp();
+			// For some reason the whole SIG handle thing doesnt work in
+			// foreground mode
+			if ($this->params['no-daemon']) {
+				$this->__mopUp();
+			}
 		}
 
 		System_Daemon::stop();
 	}
 
 /**
- * _initConfig function.
+ * status function.
+ * Check the status of the daemon
+ */
+	public function status() {
+		// Setup
+		$options = array(
+			'appName' => 'cakedaemon',
+			'logLocation' => TMP . "logs" . DS . 'cakedaemon.log'
+		);
+		System_Daemon::setOptions($options);
+
+		if (System_Daemon::isRunning() == true) {
+			$this->out('Daemon is running');
+			exit(0);
+		} else {
+			$this->out('Daemon is not running');
+			exit(1);
+		}
+	}
+
+/**
+ * handleSIGCHLD function.
+ * Handle any finished children
+ *
+ * @param mixed $signo
+ */
+	public function handleSIGCHLD($signo) {
+		System_Daemon::debug("signal caught in SIGCHLD handler: " . $signo);
+		$this->__mopUp();
+	}
+
+/**
+ * __initConfig function.
  *
  * @access private
  * @return void
  */
-	private function _initConfig() {
+	private function __initConfig() {
 		$this->config = Configure::read('daemon');
 
 		$nodes = $this->config['nodes'];
@@ -146,29 +200,25 @@ class DaemonShell extends AppShell {
 	}
 
 /**
- * _mopUp function.
+ * __mopUp function.
  *
  * @access private
  * @return void
  */
-	private function _mopUp() {
-		System_Daemon::debug("checking for finished processes");
+	private function __mopUp() {
 		$pid = pcntl_waitpid($pid = -1, $status, WNOHANG);
 
 		// While we have children to tend to
 		while ($pid > 0) {
 			$runner = $this->DaemonRunner->findByPid($pid);
-			$jobId = $runner['DaemonRunner']['job'];
-			$runnerUuid = $runner['DaemonRunner']['uuid'];
-			if (pcntl_wifexited($status)) {
-				if ($this->DaemonQueue->setComplete($jobId) && $this->DaemonRunner->setFinished($runnerUuid)) {
-					System_Daemon::info("process[$pid] exited normally after executing job[$jobId]");
+			if ($runner != null) {
+				$runnerUuid = $runner['DaemonRunner']['uuid'];
+				if (pcntl_wifexited($status) && $this->DaemonRunner->setFinished($runnerUuid)) {
+					System_Daemon::debug("PROCESS[$pid] - complete");
 				} else {
-					System_Daemon::crit("could not verify job[$jobId] was completed");
+					System_Daemon::crit("PROCESS[$pid] - irregular termination");
+					//TODO RESTART TASK
 				}
-			} else {
-				System_Daemon::crit("process[$pid] was terminated before completion");
-				//TODO RESTART TASK
 			}
 			// Check for other child tasks that have finished
 			$pid = pcntl_waitpid($pid = -1, $status, WNOHANG);
@@ -176,40 +226,41 @@ class DaemonShell extends AppShell {
 	}
 
 /**
- * _reconnectDB function.
+ * __reconnectDB function.
  *
  * @access private
  * @return void
  */
-	private function _reconnectDB() {
+	private function __reconnectDB() {
 		$this->DaemonQueue->getDatasource()->reconnect();
 	}
 
 /**
- * _spawnChild function.
+ * __spawnChild function.
  *
  * @access private
  * @param mixed $task
  * @param mixed $runner
  * @return void
  */
-	private function _spawnChild($task, $runner) {
+	private function __spawnChild($task, $runner) {
 		$taskName = $runner['DaemonRunner']['taskName'];
 		$taskId = $task['DaemonQueue']['id'];
 
 		$pid = pcntl_fork();
 
 		// Everytime we fork we break our connection
-		$this->_reconnectDB();
+		$this->__reconnectDB();
 
 		if ($pid == -1) {
-			System_Daemon::crit("could not spawn process with type[$taskName]");
+			System_Daemon::crit("TASK[$taskId] - failed to execute");
 			return false;
 		} else if ($pid) {
+			System_Daemon::debug("PROCESS[$pid] - started");
 			return true;
 		} else {
 			$pid = posix_getpid();
-			System_Daemon::debug("created process[$pid]");
+			System_Daemon::info("TASK[$taskId] - started");
 
 			// Register that we are running this job
 			$this->DaemonRunner->setRunning($runner['DaemonRunner']['uuid'], $pid, $taskId);
@@ -218,14 +269,21 @@ class DaemonShell extends AppShell {
 			if ($nodeInstance->execute($task)) {
 				if ($cron = $runner['DaemonRunner']['cron']) {
 					if (!$this->DaemonQueue->reschedule($cron, $task)) {
-						System_Daemon::warn("task[$taskId] could not be recheduled");
+						System_Daemon::warn("TASK[$taskId] - could not be recheduled");
 					} else {
-						System_Daemon::debug("task[$taskId] was recheduled");
+						System_Daemon::info("TASK[$taskId] - complete & recheduled");
+					}
+				} else {
+					if (!$this->DaemonQueue->setComplete($taskId)) {
+						System_Daemon::crit("TASK[$taskId] - may not be complete");
+					} else {
+						System_Daemon::info("TASK[$taskId] - complete");
 					}
 				}
+
 				exit;
 			} else {
-				System_Daemon::crit("task[$taskId] failed to execute");
+				System_Daemon::crit("TASK[$taskId] - failed to execute");
 				exit(1);
 			}
 		}
