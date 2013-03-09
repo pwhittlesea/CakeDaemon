@@ -36,16 +36,16 @@ class ExampleTask extends Shell {
  * needs to be rescheduled in a certain period of time.
  *
  * For example:
- * if 1 is returned then the task will be executed every minute
+ * if '1 minute' is returned then the task will be executed every minute
  * unless the job takes more than a minute to execute, in which
  * case the cron time will be incremented until the new scheduled
  * time is after the current time
  *
- * @return the number of mins between execution times, null if the job
+ * @return the time between execution times, null if the job
  *         is not to be rescheduled
  */
 	public function cron() {
-		return 1;
+		return '1 minute';
 	}
 
 /**

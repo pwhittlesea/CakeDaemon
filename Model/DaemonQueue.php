@@ -37,13 +37,13 @@ class DaemonQueue extends CakeDaemonAppModel {
  * reschedule function.
  * Ensure that the job is run again after a certain amoun of time
  *
- * @param mixed $mins the mins to delay by
+ * @param mixed $time the time to delay by
  * @param mixed $task the task to rechedule
  * @return true if all went well
  */
-	public function reschedule($mins, $task) {
+	public function reschedule($time, $task) {
 		$this->id = $task['DaemonQueue']['id'];
-		return $this->saveField('created', $this->__findNextSlot($task['DaemonQueue']['created'], $mins));
+		return $this->saveField('created', $this->__findNextSlot($task['DaemonQueue']['created'], $time));
 	}
 
 /**
@@ -72,15 +72,16 @@ class DaemonQueue extends CakeDaemonAppModel {
  * Find the next slot that is in the future
  *
  * @param mixed $date the original date for the task
- * @param mixed $mins the number of mins to add to the original date
+ * @param mixed $time the time to add to the original date
  * @return the new time
  */
-	private function __findNextSlot($date, $mins) {
-		$now = strtotime(date('Y-m-d H:i:s'));
-		$then = $mins;
-		while ($now > strtotime($date . " +$then minutes")) {
-			$then += $mins;
+	private function __findNextSlot($date, $time) {
+		$now = strtotime('now');
+		$then = strtotime($date);
+		$diff = strtotime($time) - $now;
+		while ($now > $then) {
+			$then += $diff;
 		}
-		return date('Y-m-d H:i:s', strtotime($date . " +$then minutes"));
+		return date('Y-m-d H:i:s', $then);
 	}
 }
