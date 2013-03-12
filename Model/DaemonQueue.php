@@ -10,9 +10,9 @@
  * @license       MIT License (http://www.opensource.org/licenses/mit-license.php)
  */
 
-App::uses('CakeDaemonAppModel', 'CakeDaemon.Model');
+App::uses('AppModel', 'Model');
 
-class DaemonQueue extends CakeDaemonAppModel {
+class DaemonQueue extends AppModel {
 
 	public $useTable = 'daemon_queue';
 
